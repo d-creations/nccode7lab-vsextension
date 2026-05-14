@@ -147,6 +147,7 @@
     "@types/node": "^18.19.130",
     "@types/vscode": "^1.74.0",
     "license-checker": "^25.0.1",
-    "typescript": "^5.0.4"
+    "typescript": "^5.0.4",
+    "@vscode/vsce": "^3.9.1"
   }
 }

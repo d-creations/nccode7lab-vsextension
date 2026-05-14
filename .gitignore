@@ -235,3 +235,4 @@ dist2/
 python_embedded/
 package-lock.json
 *.vsixpackage-lock.json
+*.vsix
