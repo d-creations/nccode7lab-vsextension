@@ -1,0 +1,152 @@
+{
+  "name": "nccode7lab-extension",
+  "displayName": "NC-CODE7Lab",
+  "description": "Custom Editor for CNC files like NC/MPF PA P1 P2 P3 M S and more, with integrated  workbench panel for CNC data visualization.",
+  "version": "1.0.2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/d-creations/nccode7lab-vsextension.git"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCustomEditor:nccode7lab.editor",
+    "onView:nccode7lab.workbenchPanelView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nccode7lab.openWorkbenchPanel",
+        "title": "nccode7lab: Open Workbench Panel"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "nccode7lab.editor",
+        "displayName": "nccode7lab Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.mpf"
+          },
+          {
+            "filenamePattern": "*.nc"
+          },
+          {
+            "filenamePattern": "*.PA"
+          },
+          {
+            "filenamePattern": "*.pa"
+          },
+          {
+            "filenamePattern": "*.P1"
+          },
+          {
+            "filenamePattern": "*.p1"
+          },
+          {
+            "filenamePattern": "*.P2"
+          },
+          {
+            "filenamePattern": "*.p2"
+          },
+          {
+            "filenamePattern": "*.P3"
+          },
+          {
+            "filenamePattern": "*.p3"
+          },
+          {
+            "filenamePattern": "*.M"
+          },
+          {
+            "filenamePattern": "*.m"
+          },
+          {
+            "filenamePattern": "*.S"
+          },
+          {
+            "filenamePattern": "*.s"
+          },
+          {
+            "filenamePattern": "*p-2*"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "nccode7labBottomPanel",
+          "title": "nccode7lab",
+          "icon": "$(tools)"
+        }
+      ]
+    },
+    "views": {
+      "nccode7labBottomPanel": [
+        {
+          "type": "webview",
+          "id": "nccode7lab.workbenchPanelView",
+          "name": "nccode7lab Workbench",
+          "icon": "$(layout-panel)"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "nccode7lab",
+      "properties": {
+        "nccode7lab.focas.defaultIpAddress": {
+          "type": "string",
+          "default": "DEMO",
+          "description": "Default IP Address to use for the FOCAS CNC connection."
+        },
+        "nccode7lab.theme.mode": {
+          "type": "string",
+          "enum": [
+            "vscode",
+            "one-dark",
+            "light"
+          ],
+          "default": "vscode",
+          "description": "Theme mode used inside nccode7lab webviews."
+        },
+        "nccode7lab.layout.focasPlacement": {
+          "type": "string",
+          "enum": [
+            "side-panel",
+            "bottom-panel",
+            "external-panel",
+            "disabled"
+          ],
+          "default": "external-panel",
+          "description": "Where FOCAS should appear inside the VS Code custom editor host."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile && npm run bundle",
+    "compile": "npx tsc -p ./",
+    "watch": "npx tsc -watch -p ./",
+    "prepare": "npm run compile",
+    "setup:python": "node ./scripts/download-python.js",
+    "generate:licenses": "node ./scripts/generate-licenses.js",
+    "bundle": "npm run setup:python && npm run generate:licenses && node ./scripts/bundle.js",
+    "package": "npx @vscode/vsce package"
+  },
+  "dependencies": {
+    "nccode7lab": "git+https://github.com/d-creations/nccode7lab.git"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "@types/vscode": "^1.74.0",
+    "license-checker": "^25.0.1",
+    "typescript": "^5.0.4"
+  }
+}

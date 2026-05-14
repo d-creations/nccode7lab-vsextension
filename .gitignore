@@ -32,6 +32,11 @@ MANIFEST
 *.manifest
 *.spec
 
+# Generated License Notices
+ThirdPartyNotices.txt
+ThirdPartyNotices_Node.txt
+ThirdPartyNotices_Python.txt
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
@@ -216,3 +221,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# js
+node_modules/
+
+out/
+bundle/
+focas_dlls/
+lib/
+dist/
+dist2/
+python_embedded/
+package-lock.json
+*.vsixpackage-lock.json
