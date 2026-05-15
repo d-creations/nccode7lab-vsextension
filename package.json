@@ -126,6 +126,16 @@
           ],
           "default": "external-panel",
           "description": "Where FOCAS should appear inside the VS Code custom editor host."
+        },
+        "nccode7lab.showDrawPanel": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Draw panel in nccode7lab."
+        },
+        "nccode7lab.showFocasTransfer": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show the Focas Transfer in nccode7lab."
         }
       }
     }
