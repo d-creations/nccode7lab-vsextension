@@ -13,32 +13,61 @@ type EditorRelayMessage =
     | { type: 'WORKBENCH_BRIDGE'; eventType: 'EXECUTION_ERROR'; payload: { channelId: string; error: { message: string } } }
     | { type: 'WORKBENCH_BRIDGE'; eventType: 'PLOT_CLEARED'; payload: Record<string, never> };
 
-export class NCEditorProvider implements vscode.CustomTextEditorProvider {
-	public static register(context: vscode.ExtensionContext, backendPort: number): vscode.Disposable {
-		const provider = new NCEditorProvider(context, backendPort);
-		const providerRegistration = vscode.window.registerCustomEditorProvider(
-			NCEditorProvider.viewType,
-			provider,
-			{
-				webviewOptions: {
-					retainContextWhenHidden: true
-				}
-			}
-		);
-		return providerRegistration;
-	}
+export class NCDocument implements vscode.CustomDocument {
+    public readonly uri: vscode.Uri;
+    public readonly isSingleFile: boolean;
+    public readonly activeChannel: string;
+    public channelsContent = new Map<string, string>();
+    public paHeaderContent = '';
+    public channelUris = new Map<string, vscode.Uri>();
+    public baseName: string;
 
+    constructor(
+        uri: vscode.Uri,
+        isSingleFile: boolean,
+        activeChannel: string,
+        baseName: string
+    ) {
+        this.uri = uri;
+        this.isSingleFile = isSingleFile;
+        this.activeChannel = activeChannel;
+        this.baseName = baseName;
+    }
+
+    dispose(): void {
+        // Cleanup if needed
+    }
+}
+
+export class NCEditorProvider implements vscode.CustomEditorProvider<NCDocument> {
     public static readonly viewType = 'nccode7lab.editor';
+
+    public static register(context: vscode.ExtensionContext, backendPort: number): vscode.Disposable {
+        const provider = new NCEditorProvider(context, backendPort);
+        const providerRegistration = vscode.window.registerCustomEditorProvider(
+            NCEditorProvider.viewType,
+            provider,
+            {
+                webviewOptions: {
+                    retainContextWhenHidden: true
+                },
+                supportsMultipleEditorsPerDocument: false
+            }
+        );
+        return providerRegistration;
+    }
+
     private readonly webviewPanels = new Set<vscode.WebviewPanel>();
     private activeWebviewPanel?: vscode.WebviewPanel;
+
+    private readonly _onDidChangeCustomDocument = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<NCDocument>>();
+    public readonly onDidChangeCustomDocument = this._onDidChangeCustomDocument.event;
 
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly backendPort: number,
         private readonly relayToWorkbenchPanel?: (message: EditorRelayMessage) => void,
     ) { }
-
-    private isUpdatingDocument = false;
 
     private analyzeUri(uri: vscode.Uri) {
         const ext = path.extname(uri.fsPath).toLowerCase();
@@ -90,7 +119,7 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
         return res.trim() + '\n';
     }
 
-    private async discoverSiblings(baseUri: vscode.Uri, baseName: string, activeChannel: string, channelDocs: Map<string, vscode.TextDocument>) {
+    private async discoverSiblings(baseUri: vscode.Uri, baseName: string, activeChannel: string, channelUris: Map<string, vscode.Uri>, channelsContent: Map<string, string>) {
         const dir = vscode.Uri.joinPath(baseUri, '..');
         const extMap: Record<string, string[]> = {
             '1': ['.p1', '.m', '.P1', '.M'],
@@ -106,8 +135,9 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
                     const targetUri = vscode.Uri.joinPath(dir, baseName + ext);
                     const stat = await vscode.workspace.fs.stat(targetUri);
                     if (stat) {
-                        const doc = await vscode.workspace.openTextDocument(targetUri);
-                        channelDocs.set(ch, doc);
+                        const data = await vscode.workspace.fs.readFile(targetUri);
+                        channelsContent.set(ch, Buffer.from(data).toString('utf8'));
+                        channelUris.set(ch, targetUri);
                         break;
                     }
                 } catch (e) {
@@ -117,8 +147,134 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    public async resolveCustomTextEditor(
-        document: vscode.TextDocument,
+    public async openCustomDocument(
+        uri: vscode.Uri,
+        openContext: vscode.CustomDocumentOpenContext,
+        _token: vscode.CancellationToken
+    ): Promise<NCDocument> {
+        const { isSingleFile, activeChannel, baseName } = this.analyzeUri(uri);
+        const document = new NCDocument(uri, isSingleFile, activeChannel, baseName);
+        
+        if (openContext.untitledDocumentData) {
+            const textData = Buffer.from(openContext.untitledDocumentData).toString('utf8');
+            if (isSingleFile) {
+                const parsed = this.parsePAFile(textData);
+                document.channelsContent = parsed.channels;
+                document.paHeaderContent = parsed.header;
+            } else {
+                document.channelsContent.set(activeChannel, textData);
+                document.channelUris.set(activeChannel, uri);
+            }
+            return document;
+        }
+
+        try {
+            const data = await vscode.workspace.fs.readFile(uri);
+            const textData = Buffer.from(data).toString('utf8');
+
+            if (isSingleFile) {
+                const parsed = this.parsePAFile(textData);
+                document.channelsContent = parsed.channels;
+                document.paHeaderContent = parsed.header;
+            } else {
+                document.channelsContent.set(activeChannel, textData);
+                document.channelUris.set(activeChannel, uri);
+                await this.discoverSiblings(uri, baseName, activeChannel, document.channelUris, document.channelsContent);
+            }
+        } catch (e) {
+            // File doesn't exist yet but being created or inaccessible
+        }
+
+        return document;
+    }
+
+    public async saveCustomDocument(document: NCDocument, cancellation: vscode.CancellationToken): Promise<void> {
+        if (document.isSingleFile) {
+            const assembled = this.assemblePAFile(document.paHeaderContent, document.channelsContent);
+            await vscode.workspace.fs.writeFile(document.uri, Buffer.from(assembled, 'utf8'));
+        } else {
+            for (const [ch, uri] of document.channelUris.entries()) {
+                const text = document.channelsContent.get(ch) || '';
+                await vscode.workspace.fs.writeFile(uri, Buffer.from(text, 'utf8'));
+            }
+        }
+    }
+
+    public async saveCustomDocumentAs(document: NCDocument, destination: vscode.Uri, cancellation: vscode.CancellationToken): Promise<void> {
+        // Implement as-needed, for simplicity we treat it as saving the current document instance's layout but to a new path.
+        if (document.isSingleFile) {
+            const assembled = this.assemblePAFile(document.paHeaderContent, document.channelsContent);
+            await vscode.workspace.fs.writeFile(destination, Buffer.from(assembled, 'utf8'));
+        } else {
+            const dir = vscode.Uri.joinPath(destination, '..');
+            const destBaseName = path.basename(destination.fsPath, path.extname(destination.fsPath));
+            const destExtMap: Record<string, string> = {
+                '1': '.p1',
+                '2': '.p2',
+                '3': '.p3'
+            }; // simple mappings for save as
+            
+            for (const [ch, uri] of document.channelUris.entries()) {
+                const text = document.channelsContent.get(ch) || '';
+                const activeExt = document.activeChannel === ch ? path.extname(destination.fsPath) : destExtMap[ch];
+                const targetUri = vscode.Uri.joinPath(dir, destBaseName + activeExt);
+                await vscode.workspace.fs.writeFile(targetUri, Buffer.from(text, 'utf8'));
+            }
+        }
+    }
+
+    public async revertCustomDocument(document: NCDocument, cancellation: vscode.CancellationToken): Promise<void> {
+        const { isSingleFile, activeChannel, baseName } = this.analyzeUri(document.uri);
+        document.channelsContent.clear();
+        document.channelUris.clear();
+        
+        try {
+            const data = await vscode.workspace.fs.readFile(document.uri);
+            const textData = Buffer.from(data).toString('utf8');
+
+            if (isSingleFile) {
+                const parsed = this.parsePAFile(textData);
+                document.channelsContent = parsed.channels;
+                document.paHeaderContent = parsed.header;
+            } else {
+                document.channelsContent.set(activeChannel, textData);
+                document.channelUris.set(activeChannel, document.uri);
+                await this.discoverSiblings(document.uri, baseName, activeChannel, document.channelUris, document.channelsContent);
+            }
+        } catch (e) {
+            // Reverting to empty/deleted state
+        }
+        
+        // Notify the webview panels that the document reverted
+        const channelsObj: Record<string, string> = Object.fromEntries(document.channelsContent);
+        this.webviewPanels.forEach(p => {
+            p.webview.postMessage({ type: 'FILE_UPDATED_EXTERNALLY', channels: channelsObj });
+        });
+    }
+
+    public async backupCustomDocument(document: NCDocument, context: vscode.CustomDocumentBackupContext, cancellation: vscode.CancellationToken): Promise<vscode.CustomDocumentBackup> {
+        const dest = context.destination;
+        let backupData = '';
+        if (document.isSingleFile) {
+            backupData = this.assemblePAFile(document.paHeaderContent, document.channelsContent);
+        } else {
+            const backupObj: Record<string, string> = Object.fromEntries(document.channelsContent);
+            backupData = JSON.stringify(backupObj);
+        }
+        await vscode.workspace.fs.writeFile(dest, Buffer.from(backupData, 'utf8'));
+
+        return {
+            id: dest.toString(),
+            delete: async () => {
+                try {
+                    await vscode.workspace.fs.delete(dest);
+                } catch {}
+            }
+        };
+    }
+
+    public async resolveCustomEditor(
+        document: NCDocument,
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
@@ -136,57 +292,6 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
 
         webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview);
 
-        const { isSingleFile, activeChannel, baseName } = this.analyzeUri(document.uri);
-        const channelDocs = new Map<string, vscode.TextDocument>();
-        let paChannelsContent = new Map<string, string>();
-        let paHeaderContent = '';
-
-        const loadChannels = async () => {
-            if (isSingleFile) {
-                const parsed = this.parsePAFile(document.getText());
-                paChannelsContent = parsed.channels;
-                paHeaderContent = parsed.header;
-                return Object.fromEntries(paChannelsContent);
-            } else {
-                channelDocs.set(activeChannel, document);
-                await this.discoverSiblings(document.uri, baseName, activeChannel, channelDocs);
-                const channelsObj: Record<string, string> = {};
-                for (const [ch, doc] of channelDocs.entries()) {
-                    channelsObj[ch] = doc.getText();
-                }
-                return channelsObj;
-            }
-        };
-
-        const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(e => {
-            if (this.isUpdatingDocument) return;
-
-            if (isSingleFile) {
-                if (e.document.uri.toString() === document.uri.toString()) {
-                    const parsed = this.parsePAFile(document.getText());
-                    const message: EditorRelayMessage = {
-                        type: 'FILE_UPDATED_EXTERNALLY',
-                        channels: Object.fromEntries(parsed.channels)
-                    };
-                    paChannelsContent = parsed.channels;
-                    webviewPanel.webview.postMessage(message);
-                    this.relayMessageToWorkbench(webviewPanel, message);
-                }
-            } else {
-                for (const [ch, doc] of channelDocs.entries()) {
-                    if (e.document.uri.toString() === doc.uri.toString()) {
-                        const message: EditorRelayMessage = {
-                            type: 'FILE_UPDATED_EXTERNALLY',
-                            channel: ch,
-                            text: doc.getText()
-                        };
-                        webviewPanel.webview.postMessage(message);
-                        this.relayMessageToWorkbench(webviewPanel, message);
-                    }
-                }
-            }
-        });
-
         webviewPanel.onDidChangeViewState(({ webviewPanel: panel }) => {
             if (panel.active) {
                 this.activeWebviewPanel = panel;
@@ -198,39 +303,62 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
             if (this.activeWebviewPanel === webviewPanel) {
                 this.activeWebviewPanel = Array.from(this.webviewPanels.values())[0];
             }
-            changeDocumentSubscription.dispose();
         });
 
         webviewPanel.webview.onDidReceiveMessage(async e => {
             switch (e.type) {
                 case 'ready':
-                    const channelsData = await loadChannels();
+                    const channelsObj: Record<string, string> = Object.fromEntries(document.channelsContent);
                     const readyMessage: EditorRelayMessage = {
                         type: 'FILES_OPENED',
-                        isSingleFile,
-                        activeChannel,
-                        channels: channelsData
+                        isSingleFile: document.isSingleFile,
+                        activeChannel: document.activeChannel,
+                        channels: channelsObj
                     };
                     webviewPanel.webview.postMessage(readyMessage);
                     this.relayMessageToWorkbench(webviewPanel, readyMessage);
                     return;
                 case 'changed':
-                    if (isSingleFile) {
-                        paChannelsContent.set(e.channel, e.text);
-                        const assembled = this.assemblePAFile(paHeaderContent, paChannelsContent);
-                        await this.updateTextDocument(document, assembled);
-                    } else {
-                        const targetDoc = channelDocs.get(e.channel);
-                        if (targetDoc) {
-                            await this.updateTextDocument(targetDoc, e.text);
-                        }
+                    // e.channel and e.text
+                    const channel = e.channel as string;
+                    const newText = e.text as string;
+                    const oldText = document.channelsContent.get(channel) || '';
+
+                    if (oldText === newText) {
+                        return;
                     }
+
+                    document.channelsContent.set(channel, newText);
+
+                    // Fire the CustomDocumentEditEvent with undo/redo
+                    this._onDidChangeCustomDocument.fire({
+                        document,
+                        undo: () => {
+                            document.channelsContent.set(channel, oldText);
+                            webviewPanel.webview.postMessage({
+                                type: 'FILE_UPDATED_EXTERNALLY',
+                                channel: channel,
+                                text: oldText,
+                                activeChannel: channel
+                            });
+                        },
+                        redo: () => {
+                            document.channelsContent.set(channel, newText);
+                            webviewPanel.webview.postMessage({
+                                type: 'FILE_UPDATED_EXTERNALLY',
+                                channel: channel,
+                                text: newText,
+                                activeChannel: channel
+                            });
+                        },
+                        label: `Edit Channel ${channel}`
+                    });
 
                     this.relayMessageToWorkbench(webviewPanel, {
                         type: 'FILE_UPDATED_EXTERNALLY',
-                        channel: e.channel,
-                        text: e.text,
-                        activeChannel: e.channel,
+                        channel: channel,
+                        text: newText,
+                        activeChannel: channel,
                     });
                     return;
                 case 'workbench:relay':
@@ -240,7 +368,7 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
                     this.relayMessageToWorkbench(webviewPanel, {
                         type: 'OPEN_WORKBENCH_PANEL',
                         tab: e.tab as WorkbenchTab | undefined,
-                        channel: typeof e.channel === 'string' ? e.channel : activeChannel,
+                        channel: typeof e.channel === 'string' ? e.channel : document.activeChannel,
                     });
                     return;
             }
@@ -316,20 +444,6 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
             console.error('Failed to load Vite index.html', error);
         }
         return htmlContent;
-    }
-
-    private async updateTextDocument(document: vscode.TextDocument, newText: string) {
-        const currentText = document.getText().replace(/\r\n/g, '\n').trimEnd();
-        const formattedNewText = newText.replace(/\r\n/g, '\n').trimEnd();
-        if (currentText === formattedNewText) return;
-        
-        this.isUpdatingDocument = true;
-        const edit = new vscode.WorkspaceEdit();
-        const lastLine = document.lineAt(document.lineCount - 1);
-        const fullRange = new vscode.Range(0, 0, document.lineCount - 1, lastLine.text.length);
-        edit.replace(document.uri, fullRange, newText);
-        await vscode.workspace.applyEdit(edit);
-        this.isUpdatingDocument = false;
     }
 }
 
