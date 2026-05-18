@@ -123,15 +123,15 @@ export class WorkbenchPanelWebviewViewProvider implements vscode.WebviewViewProv
         return this.postMessage({ type: 'UPDATE_CONFIG', config });
     }
 
-    public async reveal(tab?: 'variables' | 'errors' | 'focas'): Promise<void> {
+    public async reveal(tab?: 'variables' | 'errors' | 'focas', channel?: string): Promise<void> {
         await vscode.commands.executeCommand('workbench.action.focusPanel');
         await vscode.commands.executeCommand('workbench.view.extension.nccode7labBottomPanel');
 
         const view = this.currentWebviewView as vscode.WebviewView & { show?: (preserveFocus?: boolean) => void };
         view.show?.(true);
 
-        if (tab) {
-            await this.postMessage({ type: 'OPEN_WORKBENCH_PANEL', tab });
+        if (tab || channel) {
+            await this.postMessage({ type: 'OPEN_WORKBENCH_PANEL', tab, channel });
         }
     }
 
@@ -152,14 +152,17 @@ export class WorkbenchPanelWebviewViewProvider implements vscode.WebviewViewProv
                 const focasConfig = vscode.workspace.getConfiguration('nccode7lab.focas');
                 const themeMode = vscode.workspace.getConfiguration('nccode7lab').get<string>('theme.mode') || 'vscode';
                 const defaultIp = focasConfig.get<string>('defaultIpAddress') || 'DEMO';
+                const backendBaseUrl = vscode.workspace.getConfiguration('nccode7lab').get<string>('backendBaseUrl')?.trim() || `http://127.0.0.1:${this._backendPort}`;
 
                 // Inject our configuration
                 const scriptInjection = `
                 <script>
                     window.backendPort = ${this._backendPort};
+                    window.backendBaseUrl = "${backendBaseUrl}";
                     window.focasDefaultIp = "${defaultIp}";
                     window.vscodeConfig = {
                         backendPort: ${this._backendPort},
+                        backendBaseUrl: "${backendBaseUrl}",
                         focasDefaultIp: "${defaultIp}",
                         themeMode: "${themeMode}",
                         hostMode: "vscode-panel",
@@ -175,7 +178,10 @@ export class WorkbenchPanelWebviewViewProvider implements vscode.WebviewViewProv
                             window.dispatchEvent(new CustomEvent('vscode:workbench-bridge', { detail: message }));
                         }
                         if (message.type === 'OPEN_WORKBENCH_PANEL') {
-                            window.dispatchEvent(new CustomEvent('vscode:workbench-panel-command', { detail: { tab: message.tab } }));
+                            if (message.channel) {
+                                window.dispatchEvent(new CustomEvent('vscode:files-opened', { detail: { activeChannel: message.channel } }));
+                            }
+                            window.dispatchEvent(new CustomEvent('vscode:workbench-panel-command', { detail: { tab: message.tab, channel: message.channel } }));
                         }
                     });
                 </script>

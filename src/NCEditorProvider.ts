@@ -8,7 +8,7 @@ type EditorRelayMessage =
     | { type: 'FILES_OPENED'; isSingleFile: boolean; activeChannel: string; channels: Record<string, string> }
     | { type: 'FILE_UPDATED_EXTERNALLY'; channels: Record<string, string> }
     | { type: 'FILE_UPDATED_EXTERNALLY'; channel: string; text: string; activeChannel?: string }
-    | { type: 'OPEN_WORKBENCH_PANEL'; tab?: WorkbenchTab }
+    | { type: 'OPEN_WORKBENCH_PANEL'; tab?: WorkbenchTab; channel?: string }
     | { type: 'WORKBENCH_BRIDGE'; eventType: 'EXECUTION_COMPLETED'; payload: { channelId: string; result: { variableSnapshotEntries: Array<[number, number]>; errors: unknown[] } } }
     | { type: 'WORKBENCH_BRIDGE'; eventType: 'EXECUTION_ERROR'; payload: { channelId: string; error: { message: string } } }
     | { type: 'WORKBENCH_BRIDGE'; eventType: 'PLOT_CLEARED'; payload: Record<string, never> };
@@ -240,6 +240,7 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
                     this.relayMessageToWorkbench(webviewPanel, {
                         type: 'OPEN_WORKBENCH_PANEL',
                         tab: e.tab as WorkbenchTab | undefined,
+                        channel: typeof e.channel === 'string' ? e.channel : activeChannel,
                     });
                     return;
             }
@@ -279,13 +280,16 @@ export class NCEditorProvider implements vscode.CustomTextEditorProvider {
                 const defaultIp = focasConfig.get<string>('defaultIpAddress') || '192.168.1.1';
                 const themeMode = vscode.workspace.getConfiguration('nccode7lab').get<string>('theme.mode') || 'vscode';
                 const focasPlacement = layoutConfig.get<string>('focasPlacement') || 'external-panel';
+                const backendBaseUrl = vscode.workspace.getConfiguration('nccode7lab').get<string>('backendBaseUrl')?.trim() || `http://127.0.0.1:${this.backendPort}`;
 
                 const scriptInjection = `
                 <script>
                     window.backendPort = ${this.backendPort};
+                    window.backendBaseUrl = "${backendBaseUrl}";
                     window.focasDefaultIp = "${defaultIp}";
                     window.vscodeConfig = {
                         backendPort: ${this.backendPort},
+                        backendBaseUrl: "${backendBaseUrl}",
                         focasDefaultIp: "${defaultIp}",
                         themeMode: "${themeMode}",
                         hostMode: "vscode-editor",

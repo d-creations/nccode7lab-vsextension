@@ -23,6 +23,10 @@ async function getFreePort(): Promise<number> {
 
 export async function activate(context: vscode.ExtensionContext) {
 	const backendPort = await getFreePort();
+	const getBackendBaseUrl = () => {
+		const configuredBaseUrl = vscode.workspace.getConfiguration('nccode7lab').get<string>('backendBaseUrl')?.trim();
+		return configuredBaseUrl || `http://127.0.0.1:${backendPort}`;
+	};
 
     const getEditorWebviewConfig = () => {
         const focasConfig = vscode.workspace.getConfiguration('nccode7lab.focas');
@@ -30,6 +34,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const themeMode = vscode.workspace.getConfiguration('nccode7lab').get<string>('theme.mode') || 'vscode';
         return {
             backendPort,
+            backendBaseUrl: getBackendBaseUrl(),
             focasDefaultIp: focasConfig.get<string>('defaultIpAddress') || '192.168.1.1',
             themeMode,
             hostMode: 'vscode-editor',
@@ -42,6 +47,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const themeMode = vscode.workspace.getConfiguration('nccode7lab').get<string>('theme.mode') || 'vscode';
         return {
             backendPort,
+            backendBaseUrl: getBackendBaseUrl(),
             focasDefaultIp: focasConfig.get<string>('defaultIpAddress') || 'DEMO',
             themeMode,
             hostMode: 'vscode-panel',
@@ -50,7 +56,7 @@ export async function activate(context: vscode.ExtensionContext) {
     };
 
     type WorkbenchRelayMessage =
-        | { type: 'OPEN_WORKBENCH_PANEL'; tab?: WorkbenchTab }
+        | { type: 'OPEN_WORKBENCH_PANEL'; tab?: WorkbenchTab; channel?: string }
         | { type: 'FILES_OPENED'; isSingleFile: boolean; activeChannel: string; channels: Record<string, string> }
         | { type: 'FILE_UPDATED_EXTERNALLY'; channels: Record<string, string> }
         | { type: 'FILE_UPDATED_EXTERNALLY'; channel: string; text: string; activeChannel?: string }
@@ -61,7 +67,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const workbenchPanelProvider = new WorkbenchPanelWebviewViewProvider(context.extensionUri, backendPort);
     const editorProvider = new NCEditorProvider(context, backendPort, (message: WorkbenchRelayMessage) => {
         if (message.type === 'OPEN_WORKBENCH_PANEL') {
-            void workbenchPanelProvider.reveal(message.tab);
+            void workbenchPanelProvider.reveal(message.tab, message.channel);
             return;
         }
 
@@ -105,24 +111,38 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 	// Explicitly resolve the embedded backend from the pre-bundled dependencies
-        const pythonPath = path.join(context.extensionPath, 'bundle', 'python_embedded', 'python.exe');
-        const backendDir = path.join(context.extensionPath, 'bundle', 'backend');
+    const pythonCandidates = [
+        path.join(context.extensionPath, 'bundle', 'python_embedded', 'python.exe'),
+        path.join(context.extensionPath, 'python_embedded', 'python.exe'),
+    ];
+    const pythonPath = pythonCandidates.find(candidate => fs.existsSync(candidate));
+    const backendCandidates = [
+        path.join(context.extensionPath, 'bundle', 'backend'),
+        path.join(context.extensionPath, 'node_modules', 'nccode7lab', 'backend'),
+    ];
+    const backendDir = backendCandidates.find(candidate => fs.existsSync(candidate));
 
-        if (fs.existsSync(pythonPath) && fs.existsSync(backendDir)) {
-                const backendScript = path.join(backendDir, 'main_import.py');
-                console.log(`Starting embedded backend from: ${pythonPath} on port ${backendPort}`);
+    if (!pythonPath) {
+        console.warn(`Embedded Python not found. Checked: ${pythonCandidates.join(', ')}`);
+    } else if (!backendDir) {
+        console.warn(`Embedded backend not found. Checked: ${backendCandidates.join(', ')}`);
+    } else {
+        console.log(`Starting embedded backend from: ${pythonPath} on port ${backendPort}`);
 
-        backendProcess = cp.spawn(pythonPath, ['-m', 'uvicorn', 'main_import:app', '--app-dir', backendDir, '--port', backendPort.toString()], {
-            cwd: backendDir,
-                        detached: false
-                });
+    backendProcess = cp.spawn(pythonPath, ['-m', 'uvicorn', 'main_import:app', '--app-dir', backendDir, '--port', backendPort.toString()], {
+        cwd: backendDir,
+        detached: false,
+        env: {
+            ...process.env,
+            ALLOWED_ORIGINS: '*',
+            ALLOW_CREDENTIALS: 'false',
+        },
+    });
 
-                backendProcess.stdout?.on('data', data => console.log(`Backend: ${data}`));
+        backendProcess.stdout?.on('data', data => console.log(`Backend: ${data}`));
 		backendProcess.stderr?.on('data', data => console.error(`Backend Error: ${data}`));
 		backendProcess.on('error', error => console.error(`Backend process failed to start: ${error.message}`));
 		backendProcess.on('exit', code => console.log(`Backend process exited with code ${code ?? 'null'}`));
-	} else {
-		console.warn('Embedded Python not found. Assumed to be running externally or missing.');
 	}
 }
 
